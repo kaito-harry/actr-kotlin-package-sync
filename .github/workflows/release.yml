@@ -26,6 +26,11 @@ permissions:
   packages: write
 
 jobs:
+  # ────────────────────────────────────────────────────────────
+  # validate-source
+  #   Clone actr once. Validate. Upload as artifact so
+  #   downstream jobs never clone again.
+  # ────────────────────────────────────────────────────────────
   validate-source:
     runs-on: ubuntu-latest
     steps:
@@ -68,6 +73,19 @@ jobs:
               raise SystemExit("source Android build script still accumulates global RUSTFLAGS")
           PY
 
+      - name: Upload actr source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-checkout
+          path: source-checkout
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────
+  # build-native (matrix)
+  #   Cross-compile .so for each Android ABI.
+  #   Downloads source artifact instead of re-cloning.
+  #   Runs in parallel with generate-bindings.
+  # ────────────────────────────────────────────────────────────
   build-native:
     needs: validate-source
     runs-on: ubuntu-latest
@@ -80,20 +98,11 @@ jobs:
           - rust_target: x86_64-linux-android
             abi: x86_64
     steps:
-      - name: Checkout package-sync repository
-        uses: actions/checkout@v5
+      - name: Download actr source artifact
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Checkout actr source
-        env:
-          SOURCE_REPOSITORY: https://github.com/Actrium/actr
-        run: |
-          rm -rf source-checkout
-          git clone --depth 1 --branch "${{ inputs.source_tag }}" "${SOURCE_REPOSITORY}" source-checkout
-          actual_sha=$(git -C source-checkout rev-parse HEAD)
-          test "${actual_sha}" = "${{ inputs.source_sha }}"
+          name: source-checkout
+          path: source-checkout
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -141,33 +150,22 @@ jobs:
           path: native-artifacts/${{ matrix.abi }}.tar.gz
           if-no-files-found: error
 
-  publish:
-    needs:
-      - validate-source
-      - build-native
+  # ────────────────────────────────────────────────────────────
+  # generate-bindings
+  #   Compile host library + run uniffi-bindgen to produce
+  #   Kotlin binding sources. Only needs host target (no NDK).
+  #   Caches the uniffi-bindgen binary.
+  #   Runs in parallel with build-native.
+  # ────────────────────────────────────────────────────────────
+  generate-bindings:
+    needs: validate-source
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout package-sync repository
-        uses: actions/checkout@v5
+      - name: Download actr source artifact
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Checkout actr source
-        env:
-          SOURCE_REPOSITORY: https://github.com/Actrium/actr
-        run: |
-          rm -rf source-checkout
-          git clone --depth 1 --branch "${{ inputs.source_tag }}" "${SOURCE_REPOSITORY}" source-checkout
-          actual_sha=$(git -C source-checkout rev-parse HEAD)
-          test "${actual_sha}" = "${{ inputs.source_sha }}"
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
+          name: source-checkout
+          path: source-checkout
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -181,8 +179,85 @@ jobs:
         with:
           repo-token: ${{ github.token }}
 
-      - name: Install UniFFI bindgen
+      - name: Cache uniffi-bindgen binary
+        uses: actions/cache@v4
+        id: cache-uniffi
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen
+          key: uniffi-bindgen-0.31.1-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install UniFFI bindgen (if not cached)
+        if: steps.cache-uniffi.outputs.cache-hit != 'true'
         run: cargo install --locked uniffi --version 0.31.1 --features cli --bin uniffi-bindgen
+
+      - name: Verify uniffi-bindgen binary
+        run: |
+          if [ -f ~/.cargo/bin/uniffi-bindgen ]; then
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          which uniffi-bindgen
+          uniffi-bindgen --version
+
+      - name: Generate Kotlin bindings
+        working-directory: source-checkout/bindings/kotlin
+        env:
+          ACTR_BUILD_ANDROID_NATIVE: "false"
+          ACTR_BUILD_HOST_LIBRARY: "true"
+          ACTR_GENERATE_KOTLIN_BINDINGS: "true"
+        run: ./build-android.sh
+
+      - name: Verify bindings output
+        run: |
+          test -d source-checkout/bindings/kotlin/actr-kotlin/src/main/java/io/actrium/actr
+          count=$(find source-checkout/bindings/kotlin/actr-kotlin/src/main/java/io/actrium/actr -name '*.kt' | wc -l)
+          test "$count" -gt 0 || { echo "No .kt files found in bindings output"; exit 1; }
+          echo "Found $count Kotlin binding files"
+
+      - name: Upload Kotlin bindings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-bindings
+          path: source-checkout/bindings/kotlin/actr-kotlin/src/main/java/io/actrium/actr
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────
+  # publish
+  #   Assembles everything: downloads source, native .so files,
+  #   and generated bindings. Runs gradle assembleRelease + publish.
+  #   NO clone, NO Rust, NO protoc, NO uniffi, NO NDK.
+  #   Still needs Android SDK for gradle build-tools.
+  # ────────────────────────────────────────────────────────────
+  publish:
+    needs:
+      - validate-source
+      - build-native
+      - generate-bindings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout package-sync repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Download actr source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: source-checkout
+          path: source-checkout
+
+      - name: Download Kotlin bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: kotlin-bindings
+          path: source-checkout/bindings/kotlin/actr-kotlin/src/main/java/io/actrium/actr
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -204,14 +279,6 @@ jobs:
           test -f source-checkout/bindings/kotlin/actr-kotlin/src/main/jniLibs/arm64-v8a/libopus.so
           test -f source-checkout/bindings/kotlin/actr-kotlin/src/main/jniLibs/x86_64/libactr.so
           test -f source-checkout/bindings/kotlin/actr-kotlin/src/main/jniLibs/x86_64/libopus.so
-
-      - name: Generate Kotlin bindings
-        working-directory: source-checkout/bindings/kotlin
-        env:
-          ACTR_BUILD_ANDROID_NATIVE: "false"
-          ACTR_BUILD_HOST_LIBRARY: "true"
-          ACTR_GENERATE_KOTLIN_BINDINGS: "true"
-        run: ./build-android.sh
 
       - name: Package native binaries
         working-directory: source-checkout/bindings/kotlin
