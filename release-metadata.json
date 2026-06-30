@@ -1,12 +1,12 @@
 {
-  "version": "0.4.5",
+  "version": "0.4.6",
   "source_repository": "https://github.com/Actrium/actr",
-  "source_tag": "v0.4.5",
-  "source_sha": "36128fc730832f6263419064c322d9d7eddbdc12",
-  "coordinate": "io.actrium:actr:0.4.5",
+  "source_tag": "v0.4.6",
+  "source_sha": "c3fa00e0b8121a81bb62f8e5ac51a869acf33135",
+  "coordinate": "io.actrium:actr:0.4.6",
   "android_abis": [
     "arm64-v8a",
     "x86_64"
   ],
-  "generated_at": "2026-06-29T15:24:11.788309+00:00"
+  "generated_at": "2026-06-30T14:35:31.375380+00:00"
 }
