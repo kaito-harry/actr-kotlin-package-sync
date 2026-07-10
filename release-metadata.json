@@ -1,13 +1,12 @@
 {
-  "version": "0.4.13-rc.3",
-  "source_repository": "https://github.com/kaito-harry/actr",
-  "source_tag": "validation-v0.4.13-rc.3",
-  "source_sha": "a5512d5f233e2963319bbe72ba8d1058eead0176",
-  "coordinate": "io.actrium:actr:0.4.13-rc.3",
+  "version": "0.4.14",
+  "source_repository": "https://github.com/Actrium/actr",
+  "source_tag": "v0.4.14",
+  "source_sha": "059312cc1a88ce6e6b14c9867afc47948adb5588",
+  "coordinate": "io.actrium:actr:0.4.14",
   "android_abis": [
     "arm64-v8a",
     "x86_64"
   ],
-  "generated_at": "2026-07-09T12:05:28.435319+00:00",
-  "prerelease": true
+  "generated_at": "2026-07-10T01:56:35.919978+00:00"
 }
